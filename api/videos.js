@@ -1,24 +1,10 @@
-// 使用标准 Node.js Serverless Function
-// 注意：不设置 config，默认使用 Node.js Runtime
+// 使用 Node.js Serverless Function + PostgreSQL 直接连接
+import { Pool } from 'pg'
 
-import { createClient } from '@supabase/supabase-js'
-
-const supabaseUrl = process.env.SUPABASE_URL
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-if (!supabaseUrl || !supabaseServiceKey) {
-  console.error('环境变量缺失:', { 
-    url: !!supabaseUrl, 
-    key: !!supabaseServiceKey 
-  })
-  throw new Error('Supabase环境变量未配置')
-}
-
-// 创建 Supabase 客户端
-const supabase = createClient(supabaseUrl, supabaseServiceKey, {
-  auth: {
-    persistSession: false,
-    autoRefreshToken: false
+const pool = new Pool({
+  connectionString: process.env.SUPABASE_POOL_URL,
+  ssl: {
+    rejectUnauthorized: false
   }
 })
 
@@ -39,29 +25,24 @@ export default async function handler(req, res) {
       
       const studentId = req.query.studentId
       
-      let query = supabase
-        .from('videos')
-        .select('*')
-        .order('upload_time', { ascending: false })
+      let query = 'SELECT * FROM videos'
+      const params = []
       
       if (studentId) {
-        query = query.eq('student_id', studentId)
-      } else {
-        query = query.limit(100)
+        query += ' WHERE student_id = $1'
+        params.push(studentId)
       }
       
-      const { data, error } = await query
+      query += ' ORDER BY upload_time DESC'
       
-      if (error) {
-        console.error('Supabase查询错误:', error)
-        return res.status(500).json({ 
-          videos: [], 
-          error: `查询失败: ${error.message}` 
-        })
+      if (!studentId) {
+        query += ' LIMIT 100'
       }
       
-      console.log('查询成功，返回', data?.length || 0, '条记录')
-      return res.status(200).json({ videos: data || [] })
+      const { rows } = await pool.query(query, params)
+      
+      console.log('查询成功，返回', rows.length, '条记录')
+      return res.status(200).json({ videos: rows })
       
     } catch (error) {
       console.error('GET处理错误:', error)
@@ -82,24 +63,39 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: '缺少videoId' })
       }
       
-      const updateData = {}
-      if (feedback !== undefined) updateData.feedback = feedback
-      if (status !== undefined) updateData.status = status
+      const updates = []
+      const values = []
+      let paramCount = 1
       
-      const { data, error } = await supabase
-        .from('videos')
-        .update(updateData)
-        .eq('id', videoId)
-        .select()
-        .single()
-      
-      if (error) {
-        console.error('Supabase更新错误:', error)
-        return res.status(500).json({ error: `更新失败: ${error.message}` })
+      if (feedback !== undefined) {
+        updates.push(`feedback = $${paramCount}`)
+        values.push(feedback)
+        paramCount++
       }
       
-      console.log('更新成功:', data)
-      return res.status(200).json({ success: true, video: data })
+      if (status !== undefined) {
+        updates.push(`status = $${paramCount}`)
+        values.push(status)
+        paramCount++
+      }
+      
+      if (updates.length === 0) {
+        return res.status(400).json({ error: '没有要更新的字段' })
+      }
+      
+      values.push(videoId)
+      
+      const query = `
+        UPDATE videos 
+        SET ${updates.join(', ')} 
+        WHERE id = $${paramCount}
+        RETURNING *
+      `
+      
+      const { rows } = await pool.query(query, values)
+      
+      console.log('更新成功:', rows[0])
+      return res.status(200).json({ success: true, video: rows[0] })
       
     } catch (error) {
       console.error('PUT处理错误:', error)

@@ -13,6 +13,7 @@
     "@supabase/supabase-js": "^2.47.10",
     "ali-oss": "^6.21.0",
     "node-fetch": "^3.3.2",
+    "pg": "^8.11.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
