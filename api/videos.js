@@ -1,6 +1,5 @@
-// 使用 node-fetch 替代原生 fetch
-import fetch from 'node-fetch'
-import { AbortController } from 'node-fetch'
+// 使用官方 @supabase/supabase-js 客户端
+import { createClient } from '@supabase/supabase-js'
 
 const supabaseUrl = process.env.SUPABASE_URL
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -8,6 +7,14 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
 if (!supabaseUrl || !supabaseServiceKey) {
   throw new Error('Supabase环境变量未配置')
 }
+
+// 创建 Supabase 客户端，适配 Serverless 环境
+const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false
+  }
+})
 
 function createResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -21,89 +28,40 @@ function createResponse(data, status = 200) {
   })
 }
 
-// 使用 node-fetch 访问 Supabase REST API，带超时控制
-async function querySupabase(table, options = {}) {
-  const { select = '*', order, limit, eq } = options
-  
-  let url = `${supabaseUrl}/rest/v1/${table}?select=${encodeURIComponent(select)}`
-  
-  if (order) {
-    url += `&order=${encodeURIComponent(order)}`
-  }
-  if (limit) {
-    url += `&limit=${limit}`
-  }
-  if (eq) {
-    url += `&${encodeURIComponent(eq.column)}=eq.${encodeURIComponent(eq.value)}`
-  }
-
-  console.log('查询URL:', url.substring(0, 60) + '...')
-
-  // 创建 AbortController 用于超时控制
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 10000) // 10秒超时
-
-  try {
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'apikey': supabaseServiceKey,
-        'Authorization': `Bearer ${supabaseServiceKey}`,
-        'Content-Type': 'application/json'
-      },
-      signal: controller.signal
-    })
-
-    clearTimeout(timeoutId)
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error('Supabase API错误:', response.status, errorText)
-      throw new Error(`Supabase API错误: ${response.status} - ${errorText}`)
-    }
-
-    return await response.json()
-  } catch (error) {
-    clearTimeout(timeoutId)
-    if (error.name === 'AbortError') {
-      throw new Error('请求超时（10秒）')
-    }
-    throw error
-  }
-}
-
 // API: 获取学生视频列表
 export async function GET(request) {
   try {
-    console.log('API被调用 - 使用 node-fetch')
+    console.log('API被调用 - 使用 @supabase/supabase-js 客户端')
     
     const { searchParams } = new URL(request.url)
     const studentId = searchParams.get('studentId')
     
-    // 如果指定学生ID，返回该学生的视频
+    let query = supabase
+      .from('videos')
+      .select('*')
+      .order('upload_time', { ascending: false })
+    
+    // 如果指定学生ID，筛选该学生的视频
     if (studentId) {
-      const data = await querySupabase('videos', {
-        select: '*',
-        eq: { column: 'student_id', value: studentId },
-        order: 'upload_time.desc'
-      })
-      
-      return createResponse({ videos: data || [] })
+      query = query.eq('student_id', studentId)
+    } else {
+      // 否则限制返回100条
+      query = query.limit(100)
     }
-
-    // 否则返回所有视频
-    const data = await querySupabase('videos', {
-      select: '*',
-      order: 'upload_time.desc',
-      limit: 100
-    })
-
+    
+    const { data, error } = await query
+    
+    if (error) {
+      console.error('Supabase查询错误:', error.message, error)
+      return createResponse({ videos: [], error: `查询失败: ${error.message}` }, 500)
+    }
+    
     console.log('查询成功，返回', data?.length || 0, '条记录')
     return createResponse({ videos: data || [] })
     
   } catch (error) {
-    console.error('获取视频列表失败:', error.message)
-    return createResponse({ videos: [], error: error.message }, 500)
+    console.error('获取视频列表失败:', error.message, error)
+    return createResponse({ videos: [], error: `获取失败: ${error.message}` }, 500)
   }
 }
 
@@ -121,44 +79,23 @@ export async function PUT(request) {
     if (feedback !== undefined) updateData.feedback = feedback
     if (status !== undefined) updateData.status = status
 
-    const url = `${supabaseUrl}/rest/v1/videos?id=eq.${videoId}`
-    
-    // 创建 AbortController 用于超时控制
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 10000) // 10秒超时
+    const { data, error } = await supabase
+      .from('videos')
+      .update(updateData)
+      .eq('id', videoId)
+      .select()
+      .single()
 
-    try {
-      const response = await fetch(url, {
-        method: 'PATCH',
-        headers: {
-          'apikey': supabaseServiceKey,
-          'Authorization': `Bearer ${supabaseServiceKey}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'return=representation'
-        },
-        body: JSON.stringify(updateData),
-        signal: controller.signal
-      })
-
-      clearTimeout(timeoutId)
-
-      if (!response.ok) {
-        const errorText = await response.text()
-        throw new Error(`更新失败: ${response.status} - ${errorText}`)
-      }
-
-      const data = await response.json()
-      return createResponse({ success: true, video: data[0] })
-    } catch (error) {
-      clearTimeout(timeoutId)
-      if (error.name === 'AbortError') {
-        throw new Error('请求超时（10秒）')
-      }
-      throw error
+    if (error) {
+      console.error('更新视频失败:', error.message, error)
+      return createResponse({ error: `更新失败: ${error.message}` }, 500)
     }
+
+    console.log('更新成功:', data)
+    return createResponse({ success: true, video: data })
     
   } catch (error) {
-    console.error('更新视频失败:', error)
-    return createResponse({ error: error.message }, 500)
+    console.error('更新视频异常:', error.message, error)
+    return createResponse({ error: `更新异常: ${error.message}` }, 500)
   }
 }
