@@ -1,3 +1,9 @@
+// 使用 Edge Runtime 并配置新加坡区域
+export const config = {
+  runtime: 'edge',
+  regions: ['sin1']  // 新加坡区域
+}
+
 // 使用官方 @supabase/supabase-js 客户端
 import { createClient } from '@supabase/supabase-js'
 
