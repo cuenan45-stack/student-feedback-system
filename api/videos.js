@@ -1,146 +1,111 @@
-// 使用 Edge Runtime 并配置新加坡区域
-export const config = {
-  runtime: 'edge',
-  regions: ['sin1']  // 新加坡区域
-}
+// 使用标准 Node.js Serverless Function
+// 注意：不设置 config，默认使用 Node.js Runtime
+
+import { createClient } from '@supabase/supabase-js'
 
 const supabaseUrl = process.env.SUPABASE_URL
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
 
-// 直接使用 Supabase REST API
-async function querySupabase(table, options = {}) {
-  const { select = '*', order, limit, eq } = options
-  
-  let url = `${supabaseUrl}/rest/v1/${table}?select=${encodeURIComponent(select)}`
-  
-  if (order) {
-    url += `&order=${encodeURIComponent(order)}`
-  }
-  if (limit) {
-    url += `&limit=${limit}`
-  }
-  if (eq) {
-    url += `&${encodeURIComponent(eq.column)}=eq.${encodeURIComponent(eq.value)}`
-  }
-
-  console.log('Query URL:', url.substring(0, 60))
-
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: {
-      'apikey': supabaseServiceKey,
-      'Authorization': `Bearer ${supabaseServiceKey}`,
-      'Content-Type': 'application/json'
-    }
+if (!supabaseUrl || !supabaseServiceKey) {
+  console.error('环境变量缺失:', { 
+    url: !!supabaseUrl, 
+    key: !!supabaseServiceKey 
   })
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    console.error('HTTP Error:', response.status, errorText)
-    throw new Error(`HTTP ${response.status}: ${errorText}`)
-  }
-
-  return await response.json()
+  throw new Error('Supabase环境变量未配置')
 }
+
+// 创建 Supabase 客户端
+const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false
+  }
+})
 
 // API: 获取学生视频列表
-export async function GET(request) {
-  try {
-    console.log('=== API Called ===')
-    console.log('Supabase URL exists:', !!supabaseUrl)
-    console.log('Supabase Key exists:', !!supabaseServiceKey)
-    
-    const { searchParams } = new URL(request.url)
-    const studentId = searchParams.get('studentId')
-    
-    const options = {
-      select: '*',
-      order: 'upload_time.desc'
-    }
-    
-    if (studentId) {
-      options.eq = { column: 'student_id', value: studentId }
-    } else {
-      options.limit = 100
-    }
-    
-    const data = await querySupabase('videos', options)
-    
-    console.log('Query success, returned', data?.length || 0, 'records')
-    
-    return new Response(JSON.stringify({ videos: data || [] }), {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
-      }
-    })
-    
-  } catch (error) {
-    console.error('GET Error:', error.message, error.stack)
-    return new Response(JSON.stringify({ 
-      videos: [], 
-      error: error.message 
-    }), { 
-      status: 500,
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
-      }
-    })
+export default async function handler(req, res) {
+  // 设置 CORS 头
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+  
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end()
   }
-}
-
-// API: 更新视频反馈
-export async function PUT(request) {
-  try {
-    const body = await request.json()
-    const { videoId, feedback, status } = body
-
-    if (!videoId) {
-      return new Response(JSON.stringify({ error: '缺少videoId' }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' }
+  
+  if (req.method === 'GET') {
+    try {
+      console.log('=== GET /api/videos ===')
+      
+      const studentId = req.query.studentId
+      
+      let query = supabase
+        .from('videos')
+        .select('*')
+        .order('upload_time', { ascending: false })
+      
+      if (studentId) {
+        query = query.eq('student_id', studentId)
+      } else {
+        query = query.limit(100)
+      }
+      
+      const { data, error } = await query
+      
+      if (error) {
+        console.error('Supabase查询错误:', error)
+        return res.status(500).json({ 
+          videos: [], 
+          error: `查询失败: ${error.message}` 
+        })
+      }
+      
+      console.log('查询成功，返回', data?.length || 0, '条记录')
+      return res.status(200).json({ videos: data || [] })
+      
+    } catch (error) {
+      console.error('GET处理错误:', error)
+      return res.status(500).json({ 
+        videos: [], 
+        error: `服务器错误: ${error.message}` 
       })
     }
-
-    const updateData = {}
-    if (feedback !== undefined) updateData.feedback = feedback
-    if (status !== undefined) updateData.status = status
-
-    const url = `${supabaseUrl}/rest/v1/videos?id=eq.${videoId}`
-    
-    const response = await fetch(url, {
-      method: 'PATCH',
-      headers: {
-        'apikey': supabaseServiceKey,
-        'Authorization': `Bearer ${supabaseServiceKey}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'return=representation'
-      },
-      body: JSON.stringify(updateData)
-    })
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      throw new Error(`HTTP ${response.status}: ${errorText}`)
-    }
-
-    const data = await response.json()
-    
-    return new Response(JSON.stringify({ success: true, video: data[0] }), {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
-      }
-    })
-    
-  } catch (error) {
-    console.error('PUT Error:', error.message)
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    })
   }
+  
+  if (req.method === 'PUT') {
+    try {
+      console.log('=== PUT /api/videos ===')
+      
+      const { videoId, feedback, status } = req.body
+      
+      if (!videoId) {
+        return res.status(400).json({ error: '缺少videoId' })
+      }
+      
+      const updateData = {}
+      if (feedback !== undefined) updateData.feedback = feedback
+      if (status !== undefined) updateData.status = status
+      
+      const { data, error } = await supabase
+        .from('videos')
+        .update(updateData)
+        .eq('id', videoId)
+        .select()
+        .single()
+      
+      if (error) {
+        console.error('Supabase更新错误:', error)
+        return res.status(500).json({ error: `更新失败: ${error.message}` })
+      }
+      
+      console.log('更新成功:', data)
+      return res.status(200).json({ success: true, video: data })
+      
+    } catch (error) {
+      console.error('PUT处理错误:', error)
+      return res.status(500).json({ error: `服务器错误: ${error.message}` })
+    }
+  }
+  
+  return res.status(405).json({ error: '方法不允许' })
 }
