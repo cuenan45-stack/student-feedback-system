@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
-import OSS from 'ali-oss'
 
+// 初始化Supabase（使用服务端密钥）
 const supabaseUrl = process.env.SUPABASE_URL
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
 
@@ -10,6 +10,8 @@ if (!supabaseUrl || !supabaseServiceKey) {
 
 export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey)
 
+// 阿里云OSS配置（服务端）
+import OSS from 'ali-oss'
 const ossClient = new OSS({
   region: process.env.OSS_REGION,
   accessKeyId: process.env.OSS_ACCESS_KEY_ID,
