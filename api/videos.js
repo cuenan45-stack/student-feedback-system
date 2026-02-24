@@ -1,4 +1,7 @@
-// 使用 Supabase REST API 直接访问
+// 使用 node-fetch 替代原生 fetch
+import fetch from 'node-fetch'
+import { AbortController } from 'node-fetch'
+
 const supabaseUrl = process.env.SUPABASE_URL
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
 
@@ -18,7 +21,7 @@ function createResponse(data, status = 200) {
   })
 }
 
-// 直接使用 fetch 访问 Supabase REST API
+// 使用 node-fetch 访问 Supabase REST API，带超时控制
 async function querySupabase(table, options = {}) {
   const { select = '*', order, limit, eq } = options
   
@@ -34,30 +37,45 @@ async function querySupabase(table, options = {}) {
     url += `&${encodeURIComponent(eq.column)}=eq.${encodeURIComponent(eq.value)}`
   }
 
-  console.log('查询URL:', url.substring(0, 50) + '...')
+  console.log('查询URL:', url.substring(0, 60) + '...')
 
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: {
-      'apikey': supabaseServiceKey,
-      'Authorization': `Bearer ${supabaseServiceKey}`,
-      'Content-Type': 'application/json'
+  // 创建 AbortController 用于超时控制
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 10000) // 10秒超时
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'apikey': supabaseServiceKey,
+        'Authorization': `Bearer ${supabaseServiceKey}`,
+        'Content-Type': 'application/json'
+      },
+      signal: controller.signal
+    })
+
+    clearTimeout(timeoutId)
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.error('Supabase API错误:', response.status, errorText)
+      throw new Error(`Supabase API错误: ${response.status} - ${errorText}`)
     }
-  })
 
-  if (!response.ok) {
-    const errorText = await response.text()
-    console.error('Supabase API错误:', response.status, errorText)
-    throw new Error(`Supabase API错误: ${response.status} - ${errorText}`)
+    return await response.json()
+  } catch (error) {
+    clearTimeout(timeoutId)
+    if (error.name === 'AbortError') {
+      throw new Error('请求超时（10秒）')
+    }
+    throw error
   }
-
-  return await response.json()
 }
 
 // API: 获取学生视频列表
 export async function GET(request) {
   try {
-    console.log('API被调用')
+    console.log('API被调用 - 使用 node-fetch')
     
     const { searchParams } = new URL(request.url)
     const studentId = searchParams.get('studentId')
@@ -105,24 +123,39 @@ export async function PUT(request) {
 
     const url = `${supabaseUrl}/rest/v1/videos?id=eq.${videoId}`
     
-    const response = await fetch(url, {
-      method: 'PATCH',
-      headers: {
-        'apikey': supabaseServiceKey,
-        'Authorization': `Bearer ${supabaseServiceKey}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'return=representation'
-      },
-      body: JSON.stringify(updateData)
-    })
+    // 创建 AbortController 用于超时控制
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 10000) // 10秒超时
 
-    if (!response.ok) {
-      const errorText = await response.text()
-      throw new Error(`更新失败: ${response.status} - ${errorText}`)
+    try {
+      const response = await fetch(url, {
+        method: 'PATCH',
+        headers: {
+          'apikey': supabaseServiceKey,
+          'Authorization': `Bearer ${supabaseServiceKey}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=representation'
+        },
+        body: JSON.stringify(updateData),
+        signal: controller.signal
+      })
+
+      clearTimeout(timeoutId)
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`更新失败: ${response.status} - ${errorText}`)
+      }
+
+      const data = await response.json()
+      return createResponse({ success: true, video: data[0] })
+    } catch (error) {
+      clearTimeout(timeoutId)
+      if (error.name === 'AbortError') {
+        throw new Error('请求超时（10秒）')
+      }
+      throw error
     }
-
-    const data = await response.json()
-    return createResponse({ success: true, video: data[0] })
     
   } catch (error) {
     console.error('更新视频失败:', error)
