@@ -62,8 +62,8 @@ export async function GET(request) {
 
     return createResponse({ videos: data })
   } catch (error) {
-    console.error('获取视频列表失败:', error)
-    return createError('获取失败', 500)
+    console.error('获取视频列表失败:', error.message, error.stack)
+    return createError(`获取失败: ${error.message}`, 500)
   }
 }
 
