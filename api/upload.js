@@ -8,7 +8,12 @@ if (!supabaseUrl || !supabaseServiceKey) {
   throw new Error('Supabase环境变量未配置')
 }
 
-export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey)
+export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false
+  }
+})
 
 const ossClient = new OSS({
   region: process.env.OSS_REGION,
