@@ -33,6 +33,22 @@ function createError(message, status = 500) {
 // API: 获取学生视频列表
 export async function GET(request) {
   try {
+    // 先测试 Supabase 连接
+    try {
+      const { data: healthData, error: healthError } = await supabaseAdmin
+        .from('students')
+        .select('*', { count: 'exact', head: true })
+      
+      if (healthError) {
+        console.error('Supabase连接测试失败:', healthError)
+        return createError(`数据库连接失败: ${healthError.message}`, 500)
+      }
+      console.log('Supabase连接成功，学生表记录数:', healthData)
+    } catch (connError) {
+      console.error('Supabase连接异常:', connError.message, connError.stack)
+      return createError(`连接异常: ${connError.message}`, 500)
+    }
+    
     const { searchParams } = new URL(request.url)
     const studentId = searchParams.get('studentId')
     
@@ -49,21 +65,29 @@ export async function GET(request) {
     }
 
     // 否则返回所有学生的最新视频统计
-    const { data, error } = await supabaseAdmin
-      .from('videos')
-      .select(`
-        *,
-        student:students(id, name, wechat_group)
-      `)
-      .order('upload_time', { ascending: false })
-      .limit(100)
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('videos')
+        .select(`
+          *,
+          student:students(id, name, wechat_group)
+        `)
+        .order('upload_time', { ascending: false })
+        .limit(100)
 
-    if (error) throw error
+      if (error) {
+        console.error('查询videos表失败:', error)
+        return createResponse({ videos: [], error: error.message })
+      }
 
-    return createResponse({ videos: data })
+      return createResponse({ videos: data || [] })
+    } catch (queryError) {
+      console.error('查询异常:', queryError.message, queryError.stack)
+      return createResponse({ videos: [], error: queryError.message })
+    }
   } catch (error) {
     console.error('获取视频列表失败:', error.message, error.stack)
-    return createError(`获取失败: ${error.message}`, 500)
+    return createResponse({ videos: [], error: error.message })
   }
 }
 
