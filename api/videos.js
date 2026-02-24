@@ -1,12 +1,59 @@
-// 使用 Node.js Serverless Function + PostgreSQL 直接连接
-import { Pool } from 'pg'
+// 使用 Node.js Serverless Function + Supabase REST API
+import https from 'https'
 
-const pool = new Pool({
-  connectionString: process.env.SUPABASE_POOL_URL,
-  ssl: {
-    rejectUnauthorized: false
-  }
-})
+const SUPABASE_URL = process.env.SUPABASE_URL
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+// 使用 https 模块直接请求 Supabase REST API
+function makeRequest(path, method = 'GET', data = null) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(path, SUPABASE_URL)
+    
+    const options = {
+      hostname: url.hostname,
+      port: 443,
+      path: url.pathname + url.search,
+      method: method,
+      headers: {
+        'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        'apikey': SUPABASE_SERVICE_ROLE_KEY,
+        'Content-Type': 'application/json'
+      }
+    }
+    
+    if (data) {
+      const postData = JSON.stringify(data)
+      options.headers['Content-Length'] = Buffer.byteLength(postData)
+    }
+    
+    const req = https.request(options, (res) => {
+      let responseData = ''
+      
+      res.on('data', (chunk) => {
+        responseData += chunk
+      })
+      
+      res.on('end', () => {
+        try {
+          const parsedData = JSON.parse(responseData)
+          resolve({ status: res.statusCode, data: parsedData })
+        } catch (e) {
+          resolve({ status: res.statusCode, data: responseData })
+        }
+      })
+    })
+    
+    req.on('error', (error) => {
+      reject(error)
+    })
+    
+    if (data) {
+      req.write(JSON.stringify(data))
+    }
+    
+    req.end()
+  })
+}
 
 // API: 获取学生视频列表
 export default async function handler(req, res) {
@@ -22,27 +69,36 @@ export default async function handler(req, res) {
   if (req.method === 'GET') {
     try {
       console.log('=== GET /api/videos ===')
+      console.log('SUPABASE_URL:', SUPABASE_URL)
       
       const studentId = req.query.studentId
       
-      let query = 'SELECT * FROM videos'
-      const params = []
+      // 使用 Supabase 的 JOIN 语法获取学生信息
+      // videos(*, student:students(id, name, wechat_group)) 表示关联 students 表
+      let path = '/rest/v1/videos?select=*,student:students(id,name,wechat_group)&order=upload_time.desc'
       
       if (studentId) {
-        query += ' WHERE student_id = $1'
-        params.push(studentId)
+        path += `&student_id=eq.${encodeURIComponent(studentId)}`
+      } else {
+        path += '&limit=100'
       }
       
-      query += ' ORDER BY upload_time DESC'
+      console.log('请求路径:', path)
       
-      if (!studentId) {
-        query += ' LIMIT 100'
+      const response = await makeRequest(path)
+      
+      console.log('响应状态:', response.status)
+      console.log('响应数据:', JSON.stringify(response.data).substring(0, 200))
+      
+      if (response.status >= 200 && response.status < 300) {
+        return res.status(200).json({ videos: response.data || [] })
+      } else {
+        console.error('Supabase API 错误:', response.data)
+        return res.status(500).json({ 
+          videos: [], 
+          error: `查询失败: ${JSON.stringify(response.data)}` 
+        })
       }
-      
-      const { rows } = await pool.query(query, params)
-      
-      console.log('查询成功，返回', rows.length, '条记录')
-      return res.status(200).json({ videos: rows })
       
     } catch (error) {
       console.error('GET处理错误:', error)
@@ -63,39 +119,21 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: '缺少videoId' })
       }
       
-      const updates = []
-      const values = []
-      let paramCount = 1
+      const updateData = {}
+      if (feedback !== undefined) updateData.feedback = feedback
+      if (status !== undefined) updateData.status = status
       
-      if (feedback !== undefined) {
-        updates.push(`feedback = $${paramCount}`)
-        values.push(feedback)
-        paramCount++
+      const path = `/rest/v1/videos?id=eq.${videoId}`
+      
+      const response = await makeRequest(path, 'PATCH', updateData)
+      
+      if (response.status >= 200 && response.status < 300) {
+        console.log('更新成功:', response.data)
+        return res.status(200).json({ success: true, video: response.data?.[0] })
+      } else {
+        console.error('Supabase API 错误:', response.data)
+        return res.status(500).json({ error: `更新失败: ${JSON.stringify(response.data)}` })
       }
-      
-      if (status !== undefined) {
-        updates.push(`status = $${paramCount}`)
-        values.push(status)
-        paramCount++
-      }
-      
-      if (updates.length === 0) {
-        return res.status(400).json({ error: '没有要更新的字段' })
-      }
-      
-      values.push(videoId)
-      
-      const query = `
-        UPDATE videos 
-        SET ${updates.join(', ')} 
-        WHERE id = $${paramCount}
-        RETURNING *
-      `
-      
-      const { rows } = await pool.query(query, values)
-      
-      console.log('更新成功:', rows[0])
-      return res.status(200).json({ success: true, video: rows[0] })
       
     } catch (error) {
       console.error('PUT处理错误:', error)
