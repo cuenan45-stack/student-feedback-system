@@ -1,123 +1,82 @@
-// 使用 Node.js Serverless Function + OSS + https 请求 Supabase 和 DashScope
+// 使用 Vercel Edge Runtime
+export const config = {
+  runtime: 'edge',
+  regions: ['sin1']
+}
+
 import OSS from 'ali-oss'
-import https from 'https'
 
 const SUPABASE_URL = process.env.SUPABASE_URL
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 const DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY
 
-// OSS 客户端
-const ossClient = new OSS({
+// OSS 客户端配置
+const ossConfig = {
   region: process.env.OSS_REGION,
   accessKeyId: process.env.OSS_ACCESS_KEY_ID,
   accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
   bucket: process.env.OSS_BUCKET
-})
-
-// 使用 https 模块请求 Supabase REST API
-function makeSupabaseRequest(path, method = 'GET', data = null) {
-  return new Promise((resolve, reject) => {
-    const url = new URL(path, SUPABASE_URL)
-    
-    const options = {
-      hostname: url.hostname,
-      port: 443,
-      path: url.pathname + url.search,
-      method: method,
-      headers: {
-        'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-        'apikey': SUPABASE_SERVICE_ROLE_KEY,
-        'Content-Type': 'application/json'
-      }
-    }
-    
-    const req = https.request(options, (res) => {
-      let responseData = ''
-      res.on('data', (chunk) => responseData += chunk)
-      res.on('end', () => {
-        try {
-          resolve({ status: res.statusCode, data: JSON.parse(responseData) })
-        } catch (e) {
-          resolve({ status: res.statusCode, data: responseData })
-        }
-      })
-    })
-    
-    req.on('error', reject)
-    
-    if (data) {
-      req.write(JSON.stringify(data))
-    }
-    req.end()
-  })
-}
-
-// 使用 https 模块请求 DashScope API
-function makeDashScopeRequest(url, data) {
-  return new Promise((resolve, reject) => {
-    const parsedUrl = new URL(url)
-    
-    const options = {
-      hostname: parsedUrl.hostname,
-      port: 443,
-      path: parsedUrl.pathname,
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${DASHSCOPE_API_KEY}`,
-        'Content-Type': 'application/json'
-      }
-    }
-    
-    const req = https.request(options, (res) => {
-      let responseData = ''
-      res.on('data', (chunk) => responseData += chunk)
-      res.on('end', () => {
-        try {
-          resolve({ status: res.statusCode, data: JSON.parse(responseData) })
-        } catch (e) {
-          resolve({ status: res.statusCode, data: responseData })
-        }
-      })
-    })
-    
-    req.on('error', reject)
-    req.write(JSON.stringify(data))
-    req.end()
-  })
 }
 
 // API: AI分析视频
-export default async function handler(req, res) {
+export default async function handler(request) {
   // 设置 CORS 头
-  res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
-  
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end()
+  const corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type'
   }
   
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: '方法不允许' })
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { status: 200, headers: corsHeaders })
+  }
+  
+  if (request.method !== 'POST') {
+    return new Response(
+      JSON.stringify({ error: '方法不允许' }),
+      { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    )
   }
   
   try {
-    console.log('=== POST /api/analyze (AI分析) ===')
+    console.log('=== POST /api/analyze (Edge) ===')
     
-    const { videoId, studentName, videos, date } = req.body
+    const body = await request.json()
+    const { videoId, studentName, videos, date } = body
 
     if (!videoId || !studentName || !videos) {
-      return res.status(400).json({ error: '缺少必要参数' })
+      return new Response(
+        JSON.stringify({ error: '缺少必要参数' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
     }
 
     // 1. 获取视频信息
-    const videoResponse = await makeSupabaseRequest(`/rest/v1/videos?id=eq.${videoId}&select=*`, 'GET')
+    const videoApiUrl = `${SUPABASE_URL}/rest/v1/videos?id=eq.${videoId}&select=*`
+    const videoResponse = await fetch(videoApiUrl, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        'apikey': SUPABASE_SERVICE_ROLE_KEY
+      }
+    })
     
-    if (videoResponse.status !== 200 || !videoResponse.data || videoResponse.data.length === 0) {
-      return res.status(404).json({ error: '视频不存在' })
+    if (!videoResponse.ok) {
+      return new Response(
+        JSON.stringify({ error: '视频不存在' }),
+        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
     }
     
-    const video = videoResponse.data[0]
+    const videoData = await videoResponse.json()
+    if (!videoData || videoData.length === 0) {
+      return new Response(
+        JSON.stringify({ error: '视频不存在' }),
+        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+    
+    const video = videoData[0]
     console.log('获取视频信息成功:', video.id)
 
     // 2. 调用AI分析
@@ -125,30 +84,56 @@ export default async function handler(req, res) {
     console.log('AI分析完成')
 
     // 3. 更新视频记录
-    const updateResponse = await makeSupabaseRequest(`/rest/v1/videos?id=eq.${videoId}`, 'PATCH', {
-      ai_analysis: JSON.stringify(analysisResult),
-      status: 'completed'
+    const updateApiUrl = `${SUPABASE_URL}/rest/v1/videos?id=eq.${videoId}`
+    const updateResponse = await fetch(updateApiUrl, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        'apikey': SUPABASE_SERVICE_ROLE_KEY,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        ai_analysis: JSON.stringify(analysisResult),
+        status: 'completed'
+      })
     })
 
-    if (updateResponse.status >= 200 && updateResponse.status < 300) {
+    if (updateResponse.ok) {
       console.log('更新视频记录成功')
       
       // 获取更新后的视频记录
-      const updatedVideoResponse = await makeSupabaseRequest(`/rest/v1/videos?id=eq.${videoId}&select=*`, 'GET')
-      
-      return res.status(200).json({
-        success: true,
-        video: updatedVideoResponse.data?.[0] || video,
-        analysis: analysisResult
+      const updatedVideoResponse = await fetch(videoApiUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          'apikey': SUPABASE_SERVICE_ROLE_KEY
+        }
       })
+      
+      const updatedVideoData = await updatedVideoResponse.json()
+      
+      return new Response(
+        JSON.stringify({
+          success: true,
+          video: updatedVideoData?.[0] || video,
+          analysis: analysisResult
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
     } else {
-      console.error('更新视频状态失败:', updateResponse.data)
-      return res.status(500).json({ error: '分析完成但保存失败' })
+      console.error('更新视频状态失败')
+      return new Response(
+        JSON.stringify({ error: '分析完成但保存失败' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
     }
 
   } catch (error) {
     console.error('AI分析失败:', error)
-    return res.status(500).json({ error: `AI分析失败: ${error.message}` })
+    return new Response(
+      JSON.stringify({ error: `AI分析失败: ${error.message}` }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    )
   }
 }
 
@@ -161,55 +146,64 @@ async function callDashScopeAI(studentName, videos, date, video) {
   const prompt = buildPrompt(studentName, videos, date)
 
   try {
-    // 生成STS签名URL
+    // 创建 OSS 客户端并生成STS签名URL
+    const ossClient = new OSS(ossConfig)
     const signedUrl = ossClient.signatureUrl(video.object_key, {
       expires: 7200,
       method: 'GET'
     })
 
     // 调用通义千问多模态分析
-    const response = await makeDashScopeRequest('https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-analysis/generation', {
-      model: 'qwen-vl-plus',
-      input: {
-        messages: [
-          {
-            role: 'system',
-            content: [
-              {
-                type: 'text',
-                text: '你是一位英语老师。分析学生视频：1.是否点击核对 2.发音准确吗 3.词义对吗 4.错误后是否两英一中纠正。用JSON返回：{"issues":[{"issue":"问题描述"}],"feedback":"完整反馈"}'
-              }
-            ]
-          },
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'text',
-                text: prompt
-              },
-              {
-                type: 'video_url',
-                video_url: {
-                  url: signedUrl
-                }
-              }
-            ]
-          }
-        ]
+    const response = await fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-analysis/generation', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${DASHSCOPE_API_KEY}`,
+        'Content-Type': 'application/json'
       },
-      parameters: {
-        result_format: 'message',
-        max_length: 800,
-        temperature: 0.5
-      }
+      body: JSON.stringify({
+        model: 'qwen-vl-plus',
+        input: {
+          messages: [
+            {
+              role: 'system',
+              content: [
+                {
+                  type: 'text',
+                  text: '你是一位英语老师。分析学生视频：1.是否点击核对 2.发音准确吗 3.词义对吗 4.错误后是否两英一中纠正。用JSON返回：{"issues":[{"issue":"问题描述"}],"feedback":"完整反馈"}'
+                }
+              ]
+            },
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'text',
+                  text: prompt
+                },
+                {
+                  type: 'video_url',
+                  video_url: {
+                    url: signedUrl
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        parameters: {
+          result_format: 'message',
+          max_length: 800,
+          temperature: 0.5
+        }
+      })
     })
 
-    if (response.status >= 200 && response.status < 300) {
-      const aiText = response.data.output.choices[0].message.content
+    if (response.ok) {
+      const data = await response.json()
+      const aiText = data.output.choices[0].message.content
       return parseAIResult(aiText, videos.length)
     } else {
-      console.error('通义千问API错误:', response.data)
+      console.error('通义千问API错误')
       // 降级到文本分析
       return await callTextOnlyAI(studentName, videos, date)
     }
@@ -225,29 +219,37 @@ async function callDashScopeAI(studentName, videos, date, video) {
 async function callTextOnlyAI(studentName, videos, date) {
   const prompt = buildPrompt(studentName, videos, date)
 
-  const response = await makeDashScopeRequest('https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation', {
-    model: 'qwen-turbo',
-    input: {
-      messages: [
-        {
-          role: 'system',
-          content: '你是一位专业的英语老师，根据学生视频的问题描述生成反馈。'
-        },
-        {
-          role: 'user',
-          content: prompt
-        }
-      ]
+  const response = await fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${DASHSCOPE_API_KEY}`,
+      'Content-Type': 'application/json'
     },
-    parameters: {
-      result_format: 'message',
-      max_length: 1000,
-      temperature: 0.7
-    }
+    body: JSON.stringify({
+      model: 'qwen-turbo',
+      input: {
+        messages: [
+          {
+            role: 'system',
+            content: '你是一位专业的英语老师，根据学生视频的问题描述生成反馈。'
+          },
+          {
+            role: 'user',
+            content: prompt
+          }
+        ]
+      },
+      parameters: {
+        result_format: 'message',
+        max_length: 1000,
+        temperature: 0.7
+      }
+    })
   })
 
-  if (response.status >= 200 && response.status < 300) {
-    return parseAIResult(response.data.output.choices[0].message.content, videos.length)
+  if (response.ok) {
+    const data = await response.json()
+    return parseAIResult(data.output.choices[0].message.content, videos.length)
   } else {
     throw new Error('文本分析也失败')
   }
