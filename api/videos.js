@@ -62,6 +62,19 @@ export default async function handler(req, res) {
     return res.status(200).end()
   }
   
+  // 检查环境变量
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    console.error('Missing environment variables:', {
+      hasUrl: !!SUPABASE_URL,
+      hasKey: !!SUPABASE_SERVICE_ROLE_KEY
+    })
+    return res.status(500).json({ 
+      videos: [], 
+      error: '服务器配置错误：缺少数据库连接信息',
+      details: '请检查 Vercel 环境变量设置'
+    })
+  }
+  
   if (req.method === 'GET') {
     try {
       const studentId = req.query.studentId
@@ -73,15 +86,25 @@ export default async function handler(req, res) {
         path += '&limit=100'
       }
       
+      console.log('Fetching from:', SUPABASE_URL + path)
       const response = await makeRequest(path)
+      console.log('Response status:', response.status)
       
       if (response.status >= 200 && response.status < 300) {
         return res.status(200).json({ videos: response.data || [] })
       } else {
-        return res.status(500).json({ videos: [], error: `查询失败` })
+        console.error('Supabase error:', response.data)
+        return res.status(500).json({ 
+          videos: [], 
+          error: `查询失败: ${response.data?.message || '未知错误'}`
+        })
       }
     } catch (error) {
-      return res.status(500).json({ videos: [], error: `服务器错误` })
+      console.error('API error:', error)
+      return res.status(500).json({ 
+        videos: [], 
+        error: `服务器错误: ${error.message}`
+      })
     }
   }
   
