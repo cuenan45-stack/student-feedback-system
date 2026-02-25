@@ -1365,6 +1365,171 @@ function FeedbackSystem({ onLogout }) {
     setStudents(prev => prev.map(s => s.id === id ? { ...s, feedback: newFeedback } : s))
   }, [])
 
+  // 处理视频上传
+  const handleVideoUpload = useCallback(async (studentId, file) => {
+    const MAX_FILE_SIZE = 100 * 1024 * 1024  // 100MB
+    
+    if (file.size > MAX_FILE_SIZE) {
+      setError(`文件超过100MB限制`)
+      return
+    }
+
+    // 更新学生状态为上传中
+    setStudents(prev => prev.map(s => 
+      s.id === studentId ? { ...s, status: 'uploading', uploadProgress: 0 } : s
+    ))
+
+    try {
+      // 步骤1：获取OSS上传签名
+      const signResponse = await fetch(`/api/upload?studentId=${studentId}&fileName=${encodeURIComponent(file.name)}`)
+      if (!signResponse.ok) {
+        throw new Error('获取上传签名失败')
+      }
+      const signData = await signResponse.json()
+      
+      if (!signData.success) {
+        throw new Error(signData.error || '获取上传签名失败')
+      }
+
+      // 步骤2：直接上传到OSS
+      const xhr = new XMLHttpRequest()
+      
+      // 监听上传进度
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const progress = Math.round((e.loaded * 100) / e.total)
+          setStudents(prev => prev.map(s => 
+            s.id === studentId ? { ...s, uploadProgress: progress } : s
+          ))
+        }
+      }
+
+      await new Promise((resolve, reject) => {
+        xhr.open('PUT', signData.uploadUrl)
+        xhr.onload = () => {
+          if (xhr.status === 200) {
+            resolve()
+          } else {
+            reject(new Error(`上传失败: HTTP ${xhr.status}`))
+          }
+        }
+        xhr.onerror = () => reject(new Error('网络错误'))
+        xhr.send(file)
+      })
+
+      // 步骤3：保存记录到数据库
+      const saveResponse = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          student_id: studentId,
+          file_name: file.name,
+          file_url: signData.fileUrl,
+          object_key: signData.objectKey,
+          file_size: file.size,
+          duration: ''
+        })
+      })
+
+      if (!saveResponse.ok) {
+        throw new Error('保存记录失败')
+      }
+
+      const saveData = await saveResponse.json()
+
+      // 更新学生状态和视频列表
+      setStudents(prev => prev.map(s => {
+        if (s.id === studentId) {
+          return {
+            ...s,
+            status: 'pending',
+            uploadProgress: 100,
+            videos: [...s.videos, { 
+              duration: '待分析', 
+              issue: '待分析',
+              fileName: file.name,
+              videoId: saveData.video?.id
+            }]
+          }
+        }
+        return s
+      }))
+
+      setNotification({
+        title: '✅ 上传成功',
+        content: `${file.name} 上传成功，点击"AI一键反馈"进行分析`
+      })
+
+    } catch (err) {
+      console.error('上传失败:', err)
+      setError(`上传失败: ${err.message}`)
+      setStudents(prev => prev.map(s => 
+        s.id === studentId ? { ...s, status: 'pending', uploadProgress: 0 } : s
+      ))
+    }
+  }, [aiConfig])
+
+  // 为单个学生进行AI分析
+  const handleAIFeedbackForStudent = useCallback(async (studentId, videoId) => {
+    if (!aiConfig.enabled || !aiConfig.apiKey) {
+      return
+    }
+
+    setStudents(prev => prev.map(s => 
+      s.id === studentId ? { ...s, status: 'processing' } : s
+    ))
+
+    try {
+      const student = students.find(s => s.id === studentId)
+      if (!student) return
+
+      const response = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          videoId: videoId,
+          studentName: student.name,
+          videos: student.videos,
+          date: student.date
+        })
+      })
+
+      if (!response.ok) {
+        throw new Error('AI分析失败')
+      }
+
+      const data = await response.json()
+      
+      // 更新学生状态和反馈
+      setStudents(prev => prev.map(s => {
+        if (s.id === studentId) {
+          return {
+            ...s,
+            status: 'completed',
+            feedback: data.analysis.feedback,
+            videos: s.videos.map((v, idx) => ({
+              ...v,
+              issue: data.analysis.issues[idx]?.issue || v.issue
+            }))
+          }
+        }
+        return s
+      }))
+
+      setNotification({
+        title: '✅ AI分析完成',
+        content: `${student.name} 的视频分析完成`
+      })
+      
+    } catch (err) {
+      console.error('AI分析失败:', err)
+      setStudents(prev => prev.map(s => 
+        s.id === studentId ? { ...s, status: 'pending' } : s
+      ))
+      setError(`AI分析失败: ${err.message}`)
+    }
+  }, [aiConfig, students])
+
   const handleWechatGroupSave = (groups) => {
     setWechatGroups(groups)
     setCurrentPage('main')
@@ -1475,11 +1640,38 @@ function FeedbackSystem({ onLogout }) {
                 >
                   <div className="student-header flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50 transition-colors" onClick={() => toggleExpand(student.id)}>
                     <div className="flex items-center gap-3">
-                      <div className={`w-3 h-3 rounded-full ${student.status === 'pending' ? 'bg-yellow-400' : student.status === 'processing' ? 'bg-blue-400 animate-pulse' : student.status === 'sent' ? 'bg-gray-400' : 'bg-green-400'}`} />
+                      <div className={`w-3 h-3 rounded-full ${student.status === 'pending' ? 'bg-yellow-400' : student.status === 'processing' ? 'bg-blue-400 animate-pulse' : student.status === 'uploading' ? 'bg-purple-400 animate-pulse' : student.status === 'sent' ? 'bg-gray-400' : 'bg-green-400'}`} />
                       <span className="font-medium text-gray-800">{student.name} - {student.date}</span>
                       <span className="text-sm text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">{student.videos.length} 个视频</span>
+                      {student.status === 'uploading' && (
+                        <span className="text-xs text-purple-600">上传中 {student.uploadProgress}%</span>
+                      )}
                     </div>
-                    <ChevronIcon expanded={expandedId === student.id} />
+                    <div className="flex items-center gap-2">
+                      {/* 上传按钮 */}
+                      <label 
+                        className="flex items-center gap-1 px-3 py-1.5 bg-blue-500 text-white rounded-lg text-sm hover:bg-blue-600 transition-colors cursor-pointer"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <PlusIcon />
+                        <span>上传视频</span>
+                        <input 
+                          type="file" 
+                          accept="video/*" 
+                          className="hidden" 
+                          onChange={(e) => {
+                            e.stopPropagation()
+                            const file = e.target.files[0]
+                            if (file) {
+                              handleVideoUpload(student.id, file)
+                            }
+                            e.target.value = ''
+                          }}
+                          disabled={student.status === 'uploading' || student.status === 'processing'}
+                        />
+                      </label>
+                      <ChevronIcon expanded={expandedId === student.id} />
+                    </div>
                   </div>
                   
                   {expandedId === student.id && (
@@ -1656,14 +1848,83 @@ function StudentLoginPage({ onLogin }) {
 // 学生个人详情页面
 function StudentDetailPage({ studentId, studentName, onLogout }) {
   const [activeTab, setActiveTab] = useState('videos')
-  const [studentData, setStudentData] = useState(() => {
-    const data = mockData.find(s => s.id === studentId)
-    return data || null
-  })
+  const [studentData, setStudentData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  // 加载学生数据
+  useEffect(() => {
+    const loadStudentData = async () => {
+      try {
+        setLoading(true)
+        const response = await fetch(`/api/videos?studentId=${studentId}`)
+        if (!response.ok) {
+          throw new Error('获取学生数据失败')
+        }
+        const data = await response.json()
+        
+        if (data.videos && data.videos.length > 0) {
+          // 转换数据格式
+          const videos = data.videos.map(v => ({
+            duration: v.duration || '未知',
+            issue: v.ai_analysis ? JSON.parse(v.ai_analysis).issues?.[0]?.issue || '待分析' : '待分析'
+          }))
+          
+          setStudentData({
+            id: studentId,
+            name: studentName,
+            date: new Date().toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }),
+            status: data.videos[0].status,
+            videos: videos,
+            feedback: data.videos[0].feedback || ''
+          })
+        } else {
+          setStudentData({
+            id: studentId,
+            name: studentName,
+            date: new Date().toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }),
+            status: 'pending',
+            videos: [],
+            feedback: ''
+          })
+        }
+      } catch (err) {
+        console.error('加载学生数据失败:', err)
+        setError('加载数据失败，请刷新重试')
+      } finally {
+        setLoading(false)
+      }
+    }
+    
+    loadStudentData()
+  }, [studentId, studentName])
   const [uploadHistory, setUploadHistory] = useState(() => {
     const saved = localStorage.getItem(`uploadHistory_${studentId}`)
     return saved ? JSON.parse(saved) : []
   })
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto mb-4"></div>
+          <p className="text-gray-600">加载中...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-red-600 mb-4">{error}</p>
+          <button onClick={() => window.location.reload()} className="px-4 py-2 bg-blue-500 text-white rounded-lg mr-2">刷新重试</button>
+          <button onClick={onLogout} className="px-4 py-2 bg-gray-500 text-white rounded-lg">返回登录</button>
+        </div>
+      </div>
+    )
+  }
 
   if (!studentData) {
     return (
