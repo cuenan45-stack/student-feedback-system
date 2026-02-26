@@ -5,12 +5,11 @@ const SUPABASE_URL = process.env.SUPABASE_URL
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 
 const ossClient = new OSS({
-  endpoint: `https://oss-${process.env.OSS_REGION}.aliyuncs.com`,
+  region: process.env.OSS_REGION,
   accessKeyId: process.env.OSS_ACCESS_KEY_ID,
   accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
   bucket: process.env.OSS_BUCKET,
-  secure: true,
-  cname: false
+  secure: true
 })
 
 function makeSupabaseRequest(path, method = 'GET', data = null) {
@@ -97,7 +96,8 @@ export default async function handler(req, res) {
       // 构建文件访问URL - 使用正确的OSS域名格式
       const bucket = process.env.OSS_BUCKET
       const region = process.env.OSS_REGION
-      const fileUrl = `https://${bucket}.${region}.aliyuncs.com/${objectKey}`
+      // OSS外网访问地址格式: https://bucket.oss-region.aliyuncs.com
+      const fileUrl = `https://${bucket}.oss-${region}.aliyuncs.com/${objectKey}`
       console.log('构建文件URL:', fileUrl)
 
       return res.status(200).json({
