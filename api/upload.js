@@ -62,20 +62,35 @@ export default async function handler(req, res) {
       const studentId = req.query.studentId
       const fileName = req.query.fileName
       
+      console.log('收到上传请求:', { studentId, fileName })
+      
       if (!studentId || !fileName) {
+        console.log('缺少参数:', { studentId, fileName })
         return res.status(400).json({ error: '缺少参数' })
       }
+
+      // 检查OSS客户端配置
+      console.log('OSS配置检查:', {
+        region: process.env.OSS_REGION,
+        bucket: process.env.OSS_BUCKET,
+        hasAccessKey: !!process.env.OSS_ACCESS_KEY_ID,
+        hasSecret: !!process.env.OSS_ACCESS_KEY_SECRET
+      })
 
       const timestamp = Date.now()
       const ext = fileName.split('.').pop()
       const random = Math.random().toString(36).substring(2, 8)
       const objectKey = `videos/${studentId}/${timestamp}_${random}.${ext}`
 
+      console.log('生成objectKey:', objectKey)
+
       const signedUrl = await ossClient.signatureUrl(objectKey, {
         expires: 3600,
         method: 'PUT',
         contentType: 'video/mp4'
       })
+
+      console.log('生成签名URL成功')
 
       const fileUrl = ossClient.address(objectKey)
 
@@ -86,7 +101,8 @@ export default async function handler(req, res) {
         objectKey: objectKey
       })
     } catch (error) {
-      return res.status(500).json({ error: '获取上传签名失败' })
+      console.error('获取上传签名失败:', error)
+      return res.status(500).json({ error: '获取上传签名失败', details: error.message })
     }
   }
   
