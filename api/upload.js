@@ -5,11 +5,12 @@ const SUPABASE_URL = process.env.SUPABASE_URL
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 
 const ossClient = new OSS({
-  region: process.env.OSS_REGION,
+  endpoint: `https://oss-${process.env.OSS_REGION}.aliyuncs.com`,
   accessKeyId: process.env.OSS_ACCESS_KEY_ID,
   accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
   bucket: process.env.OSS_BUCKET,
-  secure: true  // 强制使用HTTPS
+  secure: true,
+  cname: false
 })
 
 function makeSupabaseRequest(path, method = 'GET', data = null) {
