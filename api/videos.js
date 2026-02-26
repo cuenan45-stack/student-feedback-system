@@ -86,7 +86,7 @@ export default async function handler(req, res) {
   if (req.method === 'GET') {
     try {
       const studentId = req.query.studentId
-      let path = '/rest/v1/videos?select=*,student:students(id,name,wechat_group)&order=upload_time.desc'
+      let path = '/rest/v1/videos?select=*,student:students(id,name)&order=upload_time.desc'
       
       if (studentId) {
         path += `&student_id=eq.${encodeURIComponent(studentId)}`
