@@ -222,6 +222,12 @@ function StudentUploadPage({ studentId, studentName, onBack }) {
   }, [uploadHistory, studentId])
 
   const handleFileSelect = async (e) => {
+    // 检查 studentId 是否有效
+    if (!studentId || studentId === 'undefined') {
+      setError('学生ID无效，请通过正确的链接访问此页面')
+      return
+    }
+
     const files = Array.from(e.target.files)
     setError('')
 
@@ -364,6 +370,27 @@ function StudentUploadPage({ studentId, studentName, onBack }) {
     })
   }
 
+  // 如果 studentId 无效，显示登录提示
+  if (!studentId || studentId === 'undefined') {
+    return (
+      <div className="min-h-screen bg-[#F5F5F5] flex items-center justify-center p-6">
+        <div className="bg-white rounded-xl shadow-lg p-8 max-w-md w-full text-center">
+          <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <InfoIcon />
+          </div>
+          <h2 className="text-xl font-semibold text-gray-800 mb-2">无法识别学生身份</h2>
+          <p className="text-gray-600 mb-6">请通过学生登录页面访问上传功能</p>
+          <button 
+            onClick={() => window.location.href = '/student'}
+            className="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+          >
+            前往登录页面
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-[#F5F5F5]">
       <header className="bg-white shadow-md px-6 py-4">
@@ -372,7 +399,7 @@ function StudentUploadPage({ studentId, studentName, onBack }) {
             <BackIcon />
             <span>返回</span>
           </button>
-          <h1 className="text-xl font-semibold text-gray-800">{studentName} - 视频提交</h1>
+          <h1 className="text-xl font-semibold text-gray-800">{studentName || '学生'} - 视频提交</h1>
           <div className="w-20"></div>
         </div>
       </header>
