@@ -1,7 +1,10 @@
 import https from 'https'
 
-const SUPABASE_URL = process.env.SUPABASE_URL
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
+// 强制重新读取环境变量
+const SUPABASE_URL = process.env.SUPABASE_URL?.trim()
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()
+
+console.log('DEBUG - SUPABASE_URL:', SUPABASE_URL)
 
 function makeRequest(path, method = 'GET', data = null) {
   return new Promise((resolve, reject) => {
