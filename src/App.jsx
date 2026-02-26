@@ -266,12 +266,20 @@ function StudentUploadPage({ studentId, studentName, onBack }) {
       setUploads(prev => [...prev, newUpload])
 
       try {
+        console.log('开始上传，studentId:', studentId)
+        
         // 步骤1：获取OSS上传签名
+        console.log('请求签名...')
         const signResponse = await fetch(`/api/upload?studentId=${studentId}&fileName=${encodeURIComponent(file.name)}`)
+        console.log('签名响应状态:', signResponse.status)
+        
         if (!signResponse.ok) {
-          throw new Error('获取上传签名失败')
+          const errorText = await signResponse.text()
+          console.error('获取签名失败:', errorText)
+          throw new Error('获取上传签名失败: ' + errorText)
         }
         const signData = await signResponse.json()
+        console.log('签名数据:', signData)
         
         if (!signData.success) {
           throw new Error(signData.error || '获取上传签名失败')
