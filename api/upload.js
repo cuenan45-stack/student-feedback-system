@@ -92,8 +92,11 @@ export default async function handler(req, res) {
 
       console.log('生成签名URL成功')
 
-      // 构建文件访问URL
-      const fileUrl = `https://${process.env.OSS_BUCKET}.${process.env.OSS_REGION}.aliyuncs.com/${objectKey}`
+      // 构建文件访问URL - 使用正确的OSS域名格式
+      const bucket = process.env.OSS_BUCKET
+      const region = process.env.OSS_REGION
+      const fileUrl = `https://${bucket}.${region}.aliyuncs.com/${objectKey}`
+      console.log('构建文件URL:', fileUrl)
 
       return res.status(200).json({
         success: true,
