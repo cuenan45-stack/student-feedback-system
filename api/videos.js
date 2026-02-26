@@ -71,7 +71,12 @@ export default async function handler(req, res) {
     return res.status(500).json({ 
       videos: [], 
       error: '服务器配置错误：缺少数据库连接信息',
-      details: '请检查 Vercel 环境变量设置'
+      details: '请检查 Vercel 环境变量设置',
+      debug: {
+        supabaseUrl: SUPABASE_URL || 'undefined',
+        urlLength: SUPABASE_URL ? SUPABASE_URL.length : 0,
+        hasKey: !!SUPABASE_SERVICE_ROLE_KEY
+      }
     })
   }
   
