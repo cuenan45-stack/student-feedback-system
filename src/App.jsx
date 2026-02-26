@@ -209,173 +209,129 @@ function Notification({ message, type, onClose }) {
 
 // 学生视频提交页面
 function StudentUploadPage({ studentId, studentName, onBack }) {
-  const [uploads, setUploads] = useState([])
-  const [currentUpload, setCurrentUpload] = useState(null)
-  const [uploadHistory, setUploadHistory] = useState(() => {
-    const saved = localStorage.getItem(`uploadHistory_${studentId}`)
-    return saved ? JSON.parse(saved) : []
-  })
+  const [selectedFile, setSelectedFile] = useState(null)
+  const [uploadProgress, setUploadProgress] = useState(0)
+  const [uploadStatus, setUploadStatus] = useState('idle') // idle, uploading, completed, error
   const [error, setError] = useState('')
+  const [videoPreview, setVideoPreview] = useState(null)
 
-  useEffect(() => {
-    localStorage.setItem(`uploadHistory_${studentId}`, JSON.stringify(uploadHistory))
-  }, [uploadHistory, studentId])
+  // 选择文件
+  const handleFileSelect = (e) => {
+    const file = e.target.files[0]
+    if (!file) return
 
-  const handleFileSelect = async (e) => {
-    // 检查 studentId 是否有效
-    if (!studentId || studentId === 'undefined') {
-      setError('学生ID无效，请通过正确的链接访问此页面')
+    // 检查文件类型
+    if (!file.type.startsWith('video/')) {
+      setError('请选择视频文件')
       return
     }
 
-    const files = Array.from(e.target.files)
-    setError('')
-
-    // 限制：单个文件不超过20MB，视频时长不超过60秒
-    const MAX_FILE_SIZE = 20 * 1024 * 1024  // 20MB
-    const MAX_DURATION = 60  // 60秒
-
-    for (let index = 0; index < files.length; index++) {
-      const file = files[index]
-      
-      // 检查文件大小
-      if (file.size > MAX_FILE_SIZE) {
-        setError(`文件 ${file.name} 超过20MB限制，请压缩后上传`)
-        return
-      }
-      
-      // 检查视频时长
-      const duration = await getVideoDuration(file)
-      if (duration > MAX_DURATION) {
-        setError(`视频 ${file.name} 时长超过60秒，请剪辑后上传`)
-        return
-      }
-      
-      const uploadId = Date.now() + index
-      
-      const newUpload = {
-        id: uploadId,
-        name: file.name,
-        size: (file.size / 1024 / 1024).toFixed(2),
-        progress: 0,
-        status: 'uploading',
-        date: new Date().toLocaleString('zh-CN')
-      }
-      
-      setCurrentUpload(newUpload)
-      setUploads(prev => [...prev, newUpload])
-
-      try {
-        console.log('开始上传，studentId:', studentId)
-        
-        // 步骤1：获取OSS上传签名
-        console.log('请求签名...')
-        const signResponse = await fetch(`/api/upload?studentId=${studentId}&fileName=${encodeURIComponent(file.name)}`)
-        console.log('签名响应状态:', signResponse.status)
-        
-        if (!signResponse.ok) {
-          const errorText = await signResponse.text()
-          console.error('获取签名失败:', errorText)
-          throw new Error('获取上传签名失败: ' + errorText)
-        }
-        const signData = await signResponse.json()
-        console.log('签名数据:', signData)
-        
-        if (!signData.success) {
-          throw new Error(signData.error || '获取上传签名失败')
-        }
-
-        // 步骤2：直接上传到OSS
-        const uploadResult = await uploadToOSS(file, signData.uploadUrl)
-        
-        if (!uploadResult.success) {
-          throw new Error(uploadResult.error || '上传失败')
-        }
-
-        // 步骤3：保存记录到数据库
-        const saveResponse = await fetch('/api/upload', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            student_id: studentId,
-            file_name: file.name,
-            file_url: signData.fileUrl,
-            object_key: signData.objectKey,  // 保存OSS路径
-            file_size: file.size,
-            duration: '' // 可以后续提取视频时长
-          })
-        })
-
-        if (!saveResponse.ok) {
-          throw new Error('保存记录失败')
-        }
-
-        const saveData = await saveResponse.json()
-
-        // 更新状态为完成
-        setUploads(prev => prev.map(u => 
-          u.id === uploadId ? { ...u, progress: 100, status: 'completed', videoId: saveData.video.id } : u
-        ))
-        
-        setUploadHistory(prev => [{
-          ...newUpload,
-          progress: 100,
-          status: 'completed',
-          videoId: saveData.video.id
-        }, ...prev].slice(0, 30))
-
-      } catch (err) {
-        console.error('上传失败:', err)
-        setUploads(prev => prev.map(u => 
-          u.id === uploadId ? { ...u, status: 'error', error: err.message } : u
-        ))
-        setError(`上传失败: ${err.message}`)
-      }
+    // 检查文件大小 (100MB)
+    if (file.size > 100 * 1024 * 1024) {
+      setError('文件超过100MB限制')
+      return
     }
 
-    setTimeout(() => setCurrentUpload(null), 1000)
+    setSelectedFile(file)
+    setError('')
+    setUploadStatus('idle')
+    setUploadProgress(0)
+    
+    // 创建预览
+    const url = URL.createObjectURL(file)
+    setVideoPreview(url)
   }
 
-  // 获取视频时长
-  const getVideoDuration = (file) => {
-    return new Promise((resolve) => {
-      const video = document.createElement('video')
-      video.src = URL.createObjectURL(file)
-      video.onloadedmetadata = () => {
-        URL.revokeObjectURL(video.src)
-        resolve(video.duration)
+  // 开始上传
+  const handleStartUpload = async () => {
+    if (!selectedFile) {
+      setError('请先选择视频文件')
+      return
+    }
+
+    if (!studentId || studentId === 'undefined') {
+      setError('学生ID无效，请重新登录')
+      return
+    }
+
+    setUploadStatus('uploading')
+    setError('')
+    setUploadProgress(0)
+
+    try {
+      // 步骤1：获取OSS上传签名
+      const signResponse = await fetch(`/api/upload?studentId=${studentId}&fileName=${encodeURIComponent(selectedFile.name)}`)
+      
+      if (!signResponse.ok) {
+        const errorText = await signResponse.text()
+        throw new Error('获取上传签名失败: ' + errorText)
       }
-      video.onerror = () => {
-        resolve(0) // 无法获取时长，默认0
+      
+      const signData = await signResponse.json()
+      
+      if (!signData.success) {
+        throw new Error(signData.error || '获取上传签名失败')
       }
-    })
+
+      // 步骤2：上传到OSS
+      await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            const progress = Math.round((e.loaded * 100) / e.total)
+            setUploadProgress(progress)
+          }
+        }
+        
+        xhr.onload = () => {
+          if (xhr.status === 200) {
+            resolve()
+          } else {
+            reject(new Error(`上传失败: HTTP ${xhr.status}`))
+          }
+        }
+        
+        xhr.onerror = () => reject(new Error('网络错误'))
+        xhr.open('PUT', signData.uploadUrl)
+        xhr.send(selectedFile)
+      })
+
+      // 步骤3：保存记录到数据库
+      const saveResponse = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          student_id: studentId,
+          file_name: selectedFile.name,
+          file_url: signData.fileUrl,
+          object_key: signData.objectKey,
+          file_size: selectedFile.size,
+          duration: ''
+        })
+      })
+
+      if (!saveResponse.ok) {
+        throw new Error('保存记录失败')
+      }
+
+      setUploadStatus('completed')
+      setUploadProgress(100)
+      
+    } catch (err) {
+      console.error('上传失败:', err)
+      setUploadStatus('error')
+      setError(`上传失败: ${err.message}`)
+    }
   }
 
-  // 上传文件到OSS
-  const uploadToOSS = async (file, signedUrl) => {
-    return new Promise((resolve) => {
-      const xhr = new XMLHttpRequest()
-      xhr.open('PUT', signedUrl)
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) {
-          const progress = Math.round((e.loaded * 100) / e.total)
-          setUploads(prev => prev.map(u => 
-            u.id === currentUpload?.id ? { ...u, progress } : u
-          ))
-        }
-      }
-      xhr.onload = () => {
-        if (xhr.status === 200) {
-          resolve({ success: true })
-        } else {
-          resolve({ success: false, error: `HTTP ${xhr.status}` })
-        }
-      }
-      xhr.onerror = () => {
-        resolve({ success: false, error: '网络错误' })
-      }
-      xhr.send(file)
-    })
+  // 取消/重置
+  const handleCancel = () => {
+    setSelectedFile(null)
+    setVideoPreview(null)
+    setUploadProgress(0)
+    setUploadStatus('idle')
+    setError('')
   }
 
   // 如果 studentId 无效，显示登录提示
@@ -422,76 +378,107 @@ function StudentUploadPage({ studentId, studentName, onBack }) {
             <h2 className="text-xl font-semibold text-gray-800 mb-2">上传学习视频</h2>
             <p className="text-gray-500 mb-6">支持 MP4、MOV 格式，单个文件不超过 500MB</p>
             
-            <label className="inline-flex items-center gap-2 px-6 py-3 bg-blue-500 text-white rounded-lg cursor-pointer hover:bg-blue-600 transition-colors">
-              <PlusIcon />
-              <span>选择视频文件</span>
-              <input type="file" accept="video/*" multiple className="hidden" onChange={handleFileSelect} />
-            </label>
+            {/* 文件选择区域 */}
+            {!selectedFile ? (
+              <label className="inline-flex items-center gap-2 px-6 py-3 bg-blue-500 text-white rounded-lg cursor-pointer hover:bg-blue-600 transition-colors">
+                <PlusIcon />
+                <span>选择视频文件</span>
+                <input type="file" accept="video/*" className="hidden" onChange={handleFileSelect} />
+              </label>
+            ) : (
+              <div className="w-full max-w-md mx-auto">
+                {/* 视频预览 */}
+                {videoPreview && (
+                  <div className="mb-4">
+                    <video 
+                      src={videoPreview} 
+                      controls 
+                      className="w-full rounded-lg"
+                      style={{ maxHeight: '200px' }}
+                    />
+                  </div>
+                )}
+                
+                {/* 文件信息 */}
+                <div className="bg-gray-50 rounded-lg p-4 mb-4">
+                  <p className="font-medium text-gray-800">{selectedFile.name}</p>
+                  <p className="text-sm text-gray-500">{(selectedFile.size / 1024 / 1024).toFixed(2)} MB</p>
+                </div>
+                
+                {/* 上传进度 */}
+                {uploadStatus === 'uploading' && (
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm text-gray-600">上传中...</span>
+                      <span className="text-sm font-medium text-blue-600">{uploadProgress}%</span>
+                    </div>
+                    <div className="h-3 bg-gray-200 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-blue-500 transition-all duration-300"
+                        style={{ width: `${uploadProgress}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                )}
+                
+                {/* 上传完成 */}
+                {uploadStatus === 'completed' && (
+                  <div className="mb-4 p-4 bg-green-50 rounded-lg">
+                    <div className="flex items-center gap-2 text-green-600">
+                      <CheckIcon />
+                      <span className="font-medium">上传成功！</span>
+                    </div>
+                  </div>
+                )}
+                
+                {/* 操作按钮 */}
+                <div className="flex gap-3">
+                  {uploadStatus === 'idle' && (
+                    <>
+                      <button 
+                        onClick={handleStartUpload}
+                        className="flex-1 px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors font-medium"
+                      >
+                        开始上传
+                      </button>
+                      <button 
+                        onClick={handleCancel}
+                        className="px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+                      >
+                        取消
+                      </button>
+                    </>
+                  )}
+                  
+                  {uploadStatus === 'uploading' && (
+                    <button 
+                      disabled
+                      className="flex-1 px-6 py-3 bg-gray-400 text-white rounded-lg cursor-not-allowed"
+                    >
+                      上传中...
+                    </button>
+                  )}
+                  
+                  {(uploadStatus === 'completed' || uploadStatus === 'error') && (
+                    <button 
+                      onClick={handleCancel}
+                      className="flex-1 px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+                    >
+                      上传下一个视频
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* 当前上传进度 */}
-        {uploads.length > 0 && (
+        {/* 错误提示 */}
+        {error && (
           <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
-            <h3 className="text-lg font-semibold text-gray-800 mb-4">上传进度</h3>
-            <div className="space-y-4">
-              {uploads.map(upload => (
-                <div key={upload.id} className="border rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-3">
-                      {upload.status === 'completed' ? (
-                        <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
-                          <CheckIcon className="w-5 h-5 text-green-500" />
-                        </div>
-                      ) : (
-                        <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
-                          <UploadIcon className="w-4 h-4 text-blue-500" />
-                        </div>
-                      )}
-                      <div>
-                        <p className="font-medium text-gray-800">{upload.name}</p>
-                        <p className="text-sm text-gray-500">{upload.size} MB</p>
-                      </div>
-                    </div>
-                    <span className={`text-sm font-medium ${
-                      upload.status === 'completed' ? 'text-green-600' : 'text-blue-600'
-                    }`}>
-                      {upload.status === 'completed' ? '上传完成' : `${upload.progress}%`}
-                    </span>
-                  </div>
-                  <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                    <div 
-                      className={`h-full transition-all duration-300 ${
-                        upload.status === 'completed' ? 'bg-green-500' : 'bg-blue-500'
-                      }`}
-                      style={{ width: `${upload.progress}%` }}
-                    ></div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* 上传历史 */}
-        {uploadHistory.length > 0 && (
-          <div className="bg-white rounded-xl shadow-sm p-6">
-            <h3 className="text-lg font-semibold text-gray-800 mb-4">上传记录</h3>
-            <div className="space-y-3">
-              {uploadHistory.slice(0, 10).map((item, index) => (
-                <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                  <div className="flex items-center gap-3">
-                    <div className="w-6 h-6 bg-green-100 rounded-full flex items-center justify-center">
-                      <CheckIcon className="w-4 h-4 text-green-500" />
-                    </div>
-                    <div>
-                      <p className="font-medium text-gray-800 text-sm">{item.name}</p>
-                      <p className="text-xs text-gray-500">{item.date}</p>
-                    </div>
-                  </div>
-                  <span className="text-xs text-green-600 font-medium">已完成</span>
-                </div>
-              ))}
+            <div className="flex items-center gap-3 text-red-600">
+              <InfoIcon />
+              <span>{error}</span>
             </div>
           </div>
         )}
