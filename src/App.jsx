@@ -292,8 +292,20 @@ function StudentUploadPage({ studentId, studentName, onBack }) {
           }
         }
         
-        xhr.onerror = () => reject(new Error('网络错误'))
+        xhr.onerror = () => {
+          console.error('XHR网络错误:', {
+            url: signData.uploadUrl,
+            status: xhr.status,
+            statusText: xhr.statusText
+          })
+          reject(new Error('网络错误'))
+        }
+        
+        xhr.ontimeout = () => reject(new Error('上传超时'))
+        
+        console.log('开始上传文件到:', signData.uploadUrl)
         xhr.open('PUT', signData.uploadUrl)
+        xhr.setRequestHeader('Content-Type', selectedFile.type || 'video/mp4')
         xhr.send(selectedFile)
       })
 
