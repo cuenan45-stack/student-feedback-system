@@ -132,30 +132,63 @@ export default async function handler(req, res) {
           return res.status(500).json({ error: 'OSS上传失败: ' + ossErr.message })
         }
         
-        // 保存到 Supabase - 使用 upsert 避免冲突
-        const { status, data } = await makeSupabaseRequest(
-          '/rest/v1/videos?on_conflict=object_key',
-          'POST',
-          {
-            student_id: body.student_id,
-            file_name: body.file_name,
-            file_url: body.file_url,
-            object_key: body.object_key,
-            file_size: body.file_size,
-            duration: body.duration || null,
-            status: 'uploaded',
-            created_at: new Date().toISOString()
-          },
-          true // 启用 upsert
+        // 先查询是否已存在该记录
+        console.log('查询是否已存在记录:', body.object_key)
+        const { status: queryStatus, data: existingData } = await makeSupabaseRequest(
+          `/rest/v1/videos?object_key=eq.${encodeURIComponent(body.object_key)}&select=id`,
+          'GET'
         )
         
-        console.log('Supabase保存结果:', { status, data: JSON.stringify(data).substring(0, 200) })
+        console.log('查询结果:', { queryStatus, existingData })
         
-        if (status >= 200 && status < 300) {
-          return res.status(200).json({ success: true, data })
+        let saveStatus, saveData
+        
+        if (queryStatus === 200 && existingData && existingData.length > 0) {
+          // 已存在，更新记录
+          console.log('记录已存在，执行更新:', existingData[0].id)
+          const updateResult = await makeSupabaseRequest(
+            `/rest/v1/videos?id=eq.${existingData[0].id}`,
+            'PATCH',
+            {
+              student_id: body.student_id,
+              file_name: body.file_name,
+              file_url: body.file_url,
+              file_size: body.file_size,
+              duration: body.duration || null,
+              status: 'uploaded',
+              created_at: new Date().toISOString()
+            }
+          )
+          saveStatus = updateResult.status
+          saveData = updateResult.data
         } else {
-          console.error('Supabase保存失败:', { status, data })
-          return res.status(500).json({ error: '保存记录失败', details: data })
+          // 不存在，插入新记录
+          console.log('记录不存在，执行插入')
+          const insertResult = await makeSupabaseRequest(
+            '/rest/v1/videos',
+            'POST',
+            {
+              student_id: body.student_id,
+              file_name: body.file_name,
+              file_url: body.file_url,
+              object_key: body.object_key,
+              file_size: body.file_size,
+              duration: body.duration || null,
+              status: 'uploaded',
+              created_at: new Date().toISOString()
+            }
+          )
+          saveStatus = insertResult.status
+          saveData = insertResult.data
+        }
+        
+        console.log('Supabase保存结果:', { saveStatus, saveData: JSON.stringify(saveData).substring(0, 200) })
+        
+        if (saveStatus >= 200 && saveStatus < 300) {
+          return res.status(200).json({ success: true, data: saveData })
+        } else {
+          console.error('Supabase保存失败:', { saveStatus, saveData })
+          return res.status(500).json({ error: '保存记录失败', details: saveData })
         }
       }
       
