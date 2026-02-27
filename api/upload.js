@@ -1,5 +1,6 @@
 import OSS from 'ali-oss'
 import https from 'https'
+import { randomUUID } from 'crypto'
 
 const SUPABASE_URL = process.env.SUPABASE_URL
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -132,53 +133,31 @@ export default async function handler(req, res) {
           return res.status(500).json({ error: 'OSS上传失败: ' + ossErr.message })
         }
         
-        // 先查询是否已存在该记录
-        console.log('查询是否已存在记录:', body.object_key)
-        const { status: queryStatus, data: existingData } = await makeSupabaseRequest(
-          `/rest/v1/videos?object_key=eq.${encodeURIComponent(body.object_key)}&select=id`,
-          'GET'
+        // 先删除已存在的记录（如果有）
+        console.log('删除已存在的记录:', body.object_key)
+        await makeSupabaseRequest(
+          `/rest/v1/videos?object_key=eq.${encodeURIComponent(body.object_key)}`,
+          'DELETE'
         )
         
-        console.log('查询结果:', { queryStatus, existingData })
-        
-        let saveStatus, saveData
-        
-        if (queryStatus === 200 && existingData && existingData.length > 0) {
-          // 已存在，更新记录
-          console.log('记录已存在，执行更新:', existingData[0].id)
-          const updateResult = await makeSupabaseRequest(
-            `/rest/v1/videos?id=eq.${existingData[0].id}`,
-            'PATCH',
-            {
-              student_id: body.student_id,
-              file_name: body.file_name,
-              file_url: body.file_url,
-              file_size: body.file_size,
-              duration: body.duration || null,
-              status: 'uploaded'
-            }
-          )
-          saveStatus = updateResult.status
-          saveData = updateResult.data
-        } else {
-          // 不存在，插入新记录
-          console.log('记录不存在，执行插入')
-          const insertResult = await makeSupabaseRequest(
-            '/rest/v1/videos',
-            'POST',
-            {
-              student_id: body.student_id,
-              file_name: body.file_name,
-              file_url: body.file_url,
-              object_key: body.object_key,
-              file_size: body.file_size,
-              duration: body.duration || null,
-              status: 'uploaded'
-            }
-          )
-          saveStatus = insertResult.status
-          saveData = insertResult.data
-        }
+        // 插入新记录
+        console.log('插入新记录')
+        const insertResult = await makeSupabaseRequest(
+          '/rest/v1/videos',
+          'POST',
+          {
+            id: randomUUID(),
+            student_id: body.student_id,
+            file_name: body.file_name,
+            file_url: body.file_url,
+            object_key: body.object_key,
+            file_size: body.file_size,
+            duration: body.duration || null,
+            status: 'uploaded'
+          }
+        )
+        const saveStatus = insertResult.status
+        const saveData = insertResult.data
         
         console.log('Supabase保存结果:', { saveStatus, saveData: JSON.stringify(saveData).substring(0, 200) })
         
