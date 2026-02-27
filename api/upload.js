@@ -155,8 +155,7 @@ export default async function handler(req, res) {
               file_url: body.file_url,
               file_size: body.file_size,
               duration: body.duration || null,
-              status: 'uploaded',
-              created_at: new Date().toISOString()
+              status: 'uploaded'
             }
           )
           saveStatus = updateResult.status
@@ -174,8 +173,7 @@ export default async function handler(req, res) {
               object_key: body.object_key,
               file_size: body.file_size,
               duration: body.duration || null,
-              status: 'uploaded',
-              created_at: new Date().toISOString()
+              status: 'uploaded'
             }
           )
           saveStatus = insertResult.status
