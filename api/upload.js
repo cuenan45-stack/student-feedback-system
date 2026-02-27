@@ -125,22 +125,24 @@ export default async function handler(req, res) {
           return res.status(500).json({ error: 'OSS上传失败: ' + ossErr.message })
         }
         
-        // 保存到 Supabase
-        const { status, data } = await makeSupabaseRequest('/rest/v1/videos', 'POST', {
+        // 保存到 Supabase - 使用 upsert 避免冲突
+        const { status, data } = await makeSupabaseRequest('/rest/v1/videos?on_conflict=object_key', 'POST', {
           student_id: body.student_id,
           file_name: body.file_name,
           file_url: body.file_url,
           object_key: body.object_key,
           file_size: body.file_size,
           duration: body.duration || null,
-          status: 'uploaded'
+          status: 'uploaded',
+          created_at: new Date().toISOString()
         })
         
-        console.log('Supabase保存结果:', { status })
+        console.log('Supabase保存结果:', { status, data: JSON.stringify(data).substring(0, 200) })
         
         if (status >= 200 && status < 300) {
           return res.status(200).json({ success: true, data })
         } else {
+          console.error('Supabase保存失败:', { status, data })
           return res.status(500).json({ error: '保存记录失败', details: data })
         }
       }
