@@ -290,20 +290,20 @@ function StudentUploadPage({ studentId, studentName, onBack }) {
       setUploadProgress(60)
       
       // 上传到服务器，服务器再上传到OSS
-        // 注意：使用 studentName 作为数据库的 student_id，因为 Supabase 中存储的是中文名字
-        const uploadResponse = await fetch('/api/upload', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            fileData: fileData,
-            student_id: studentName, // 使用学生姓名作为ID，匹配Supabase中的记录
-            file_name: selectedFile.name,
-            file_url: signData.fileUrl,
-            object_key: signData.objectKey,
-            file_size: selectedFile.size,
-            duration: ''
-          })
+      // 注意：使用 studentName 作为数据库的 student_id，因为 Supabase 中存储的是中文名字
+      const uploadResponse = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileData: fileData,
+          student_id: studentName, // 使用学生姓名作为ID，匹配Supabase中的记录
+          file_name: selectedFile.name,
+          file_url: signData.fileUrl,
+          object_key: signData.objectKey,
+          file_size: selectedFile.size,
+          duration: ''
         })
+      })
       
       if (!uploadResponse.ok) {
         const errorData = await uploadResponse.json()
