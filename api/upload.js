@@ -12,20 +12,27 @@ const ossClient = new OSS({
   secure: true
 })
 
-function makeSupabaseRequest(path, method = 'GET', data = null) {
+function makeSupabaseRequest(path, method = 'GET', data = null, upsert = false) {
   return new Promise((resolve, reject) => {
     const url = new URL(path, SUPABASE_URL)
+    
+    const headers = {
+      'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      'apikey': SUPABASE_SERVICE_ROLE_KEY,
+      'Content-Type': 'application/json'
+    }
+    
+    // 如果是 upsert 操作，添加必要的 header
+    if (upsert) {
+      headers['Prefer'] = 'resolution=merge-duplicates'
+    }
     
     const options = {
       hostname: url.hostname,
       port: 443,
       path: url.pathname + url.search,
       method: method,
-      headers: {
-        'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-        'apikey': SUPABASE_SERVICE_ROLE_KEY,
-        'Content-Type': 'application/json'
-      }
+      headers: headers
     }
     
     const req = https.request(options, (res) => {
@@ -126,16 +133,21 @@ export default async function handler(req, res) {
         }
         
         // 保存到 Supabase - 使用 upsert 避免冲突
-        const { status, data } = await makeSupabaseRequest('/rest/v1/videos?on_conflict=object_key', 'POST', {
-          student_id: body.student_id,
-          file_name: body.file_name,
-          file_url: body.file_url,
-          object_key: body.object_key,
-          file_size: body.file_size,
-          duration: body.duration || null,
-          status: 'uploaded',
-          created_at: new Date().toISOString()
-        })
+        const { status, data } = await makeSupabaseRequest(
+          '/rest/v1/videos?on_conflict=object_key',
+          'POST',
+          {
+            student_id: body.student_id,
+            file_name: body.file_name,
+            file_url: body.file_url,
+            object_key: body.object_key,
+            file_size: body.file_size,
+            duration: body.duration || null,
+            status: 'uploaded',
+            created_at: new Date().toISOString()
+          },
+          true // 启用 upsert
+        )
         
         console.log('Supabase保存结果:', { status, data: JSON.stringify(data).substring(0, 200) })
         
