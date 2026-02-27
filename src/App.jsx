@@ -273,46 +273,28 @@ function StudentUploadPage({ studentId, studentName, onBack }) {
         throw new Error(signData.error || '获取上传签名失败')
       }
 
-      // 步骤2：上传到OSS
-      await new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest()
-        
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) {
-            const progress = Math.round((e.loaded * 100) / e.total)
-            setUploadProgress(progress)
-          }
+      // 步骤2：读取文件并转换为base64，然后上传到服务器
+      setUploadProgress(30)
+      
+      const fileData = await new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => {
+          // 获取base64数据（去掉data:前缀）
+          const base64 = reader.result.split(',')[1]
+          resolve(base64)
         }
-        
-        xhr.onload = () => {
-          if (xhr.status === 200) {
-            resolve()
-          } else {
-            reject(new Error(`上传失败: HTTP ${xhr.status}`))
-          }
-        }
-        
-        xhr.onerror = () => {
-          console.error('XHR网络错误:', {
-            url: signData.uploadUrl,
-            status: xhr.status,
-            statusText: xhr.statusText
-          })
-          reject(new Error('网络错误'))
-        }
-        
-        xhr.ontimeout = () => reject(new Error('上传超时'))
-        
-        console.log('开始上传文件到:', signData.uploadUrl)
-        xhr.open('PUT', signData.uploadUrl)
-        xhr.send(selectedFile)
+        reader.onerror = reject
+        reader.readAsDataURL(selectedFile)
       })
-
-      // 步骤3：保存记录到数据库
-      const saveResponse = await fetch('/api/upload', {
+      
+      setUploadProgress(60)
+      
+      // 上传到服务器，服务器再上传到OSS
+      const uploadResponse = await fetch('/api/upload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          fileData: fileData,
           student_id: studentId,
           file_name: selectedFile.name,
           file_url: signData.fileUrl,
@@ -321,11 +303,13 @@ function StudentUploadPage({ studentId, studentName, onBack }) {
           duration: ''
         })
       })
-
-      if (!saveResponse.ok) {
-        throw new Error('保存记录失败')
+      
+      if (!uploadResponse.ok) {
+        const errorData = await uploadResponse.json()
+        throw new Error(errorData.error || '上传失败')
       }
-
+      
+      setUploadProgress(100)
       setUploadStatus('completed')
       setUploadProgress(100)
       

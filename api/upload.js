@@ -58,6 +58,7 @@ export default async function handler(req, res) {
     return res.status(200).end()
   }
   
+  // GET 请求 - 获取上传配置信息
   if (req.method === 'GET') {
     try {
       const studentId = req.query.studentId
@@ -85,13 +86,6 @@ export default async function handler(req, res) {
 
       console.log('生成objectKey:', objectKey)
 
-      const signedUrl = await ossClient.signatureUrl(objectKey, {
-        expires: 3600,
-        method: 'PUT'
-      })
-
-      console.log('生成签名URL成功')
-
       // 构建文件访问URL - 使用正确的OSS域名格式
       const bucket = process.env.OSS_BUCKET
       const region = process.env.OSS_REGION
@@ -101,42 +95,83 @@ export default async function handler(req, res) {
 
       return res.status(200).json({
         success: true,
-        uploadUrl: signedUrl,
+        objectKey: objectKey,
         fileUrl: fileUrl,
-        objectKey: objectKey
+        uploadType: 'server' // 告诉前端使用服务器上传
       })
-    } catch (error) {
-      console.error('获取上传签名失败:', error)
-      return res.status(500).json({ error: '获取上传签名失败', details: error.message })
+    } catch (err) {
+      console.error('获取上传配置失败:', err)
+      return res.status(500).json({ error: err.message })
     }
   }
   
+  // POST 请求 - 处理文件上传和保存记录
   if (req.method === 'POST') {
     try {
-      const { student_id, file_name, file_url, file_size, duration, object_key } = req.body
-
-      if (!student_id || !file_url) {
+      const body = req.body
+      console.log('收到POST请求:', Object.keys(body))
+      
+      // 检查是否是 base64 文件上传
+      if (body.fileData && body.objectKey) {
+        // 服务器端上传到 OSS
+        const buffer = Buffer.from(body.fileData, 'base64')
+        console.log('准备上传到OSS:', body.objectKey, '大小:', buffer.length)
+        
+        try {
+          const result = await ossClient.put(body.objectKey, buffer)
+          console.log('OSS上传成功:', result.url)
+        } catch (ossErr) {
+          console.error('OSS上传失败:', ossErr)
+          return res.status(500).json({ error: 'OSS上传失败: ' + ossErr.message })
+        }
+        
+        // 保存到 Supabase
+        const { status, data } = await makeSupabaseRequest('/rest/v1/videos', 'POST', {
+          student_id: body.student_id,
+          file_name: body.file_name,
+          file_url: body.file_url,
+          object_key: body.object_key,
+          file_size: body.file_size,
+          duration: body.duration || null,
+          status: 'uploaded'
+        })
+        
+        console.log('Supabase保存结果:', { status })
+        
+        if (status >= 200 && status < 300) {
+          return res.status(200).json({ success: true, data })
+        } else {
+          return res.status(500).json({ error: '保存记录失败', details: data })
+        }
+      }
+      
+      // 普通表单上传（文件已上传到OSS，只保存记录）
+      const { student_id, file_name, file_url, object_key, file_size, duration } = body
+      
+      if (!student_id || !file_name || !file_url) {
         return res.status(400).json({ error: '缺少必要参数' })
       }
-
-      const response = await makeSupabaseRequest('/rest/v1/videos', 'POST', {
+      
+      const { status, data } = await makeSupabaseRequest('/rest/v1/videos', 'POST', {
         student_id,
         file_name,
         file_url,
-        object_key: object_key || null,
-        file_size: file_size || null,
+        object_key,
+        file_size,
         duration: duration || null,
-        status: 'pending',
-        upload_time: new Date().toISOString()
+        status: 'uploaded'
       })
-
-      if (response.status >= 200 && response.status < 300) {
-        return res.status(200).json({ success: true, video: response.data })
+      
+      console.log('Supabase保存结果:', { status })
+      
+      if (status >= 200 && status < 300) {
+        return res.status(200).json({ success: true, data })
       } else {
-        return res.status(500).json({ error: '保存失败' })
+        return res.status(500).json({ error: '保存记录失败', details: data })
       }
-    } catch (error) {
-      return res.status(500).json({ error: '服务器错误' })
+    } catch (err) {
+      console.error('处理上传失败:', err)
+      return res.status(500).json({ error: err.message })
     }
   }
   
