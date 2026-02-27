@@ -87,8 +87,7 @@ export default async function handler(req, res) {
 
       const signedUrl = await ossClient.signatureUrl(objectKey, {
         expires: 3600,
-        method: 'PUT',
-        contentType: 'video/mp4'
+        method: 'PUT'
       })
 
       console.log('生成签名URL成功')

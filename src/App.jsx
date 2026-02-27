@@ -305,7 +305,6 @@ function StudentUploadPage({ studentId, studentName, onBack }) {
         
         console.log('开始上传文件到:', signData.uploadUrl)
         xhr.open('PUT', signData.uploadUrl)
-        xhr.setRequestHeader('Content-Type', selectedFile.type || 'video/mp4')
         xhr.send(selectedFile)
       })
 
